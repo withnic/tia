@@ -46,8 +46,11 @@ jobs:
       - name: Run affected tests
         if: steps.tia.outputs.affected == 'true'
         run: |
-          base="${{ github.event.pull_request.base.ref }}"
-          ./bin/tia -base "${base}" -dirty=false -exec -v 2>&1 | tee tia-report/test-output.txt
+          # Read the go test command tia generated and insert -v for per-test output
+          cmd=$(cat tia-report/command.txt)
+          # "go test -tags=... ..." -> insert -v after "go test"
+          verbose_cmd=$(echo "${cmd}" | sed 's/^go test /go test -v /')
+          eval "${verbose_cmd}" 2>&1 | tee tia-report/test-output.txt || true
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       - name: Build summary
@@ -56,17 +59,15 @@ jobs:
           echo "## Test Impact Analysis" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # Parse test results into a table
           echo "| Test | Package | Result |" >> "$GITHUB_STEP_SUMMARY"
           echo "|------|---------|--------|" >> "$GITHUB_STEP_SUMMARY"
 
-          grep -E '^\s*(seed|test) ' tia-report/details.txt | grep '^  *test ' | while read -r line; do
+          grep -E '^\s*test ' tia-report/details.txt | while read -r line; do
             name=$(echo "${line}" | sed -E 's/.*test [^ ]*\.([^ ]+) .*/\1/')
             pkg=$(echo "${line}" | sed -E 's/.*test ([^ ]*)\..*/\1/')
-            # Check if this test passed in the output
-            if grep -q "--- PASS: ${name}" tia-report/test-output.txt 2>/dev/null; then
+            if grep -q -- "--- PASS: ${name}" tia-report/test-output.txt 2>/dev/null; then
               result="✅ pass"
-            elif grep -q "--- FAIL: ${name}" tia-report/test-output.txt 2>/dev/null; then
+            elif grep -q -- "--- FAIL: ${name}" tia-report/test-output.txt 2>/dev/null; then
               result="❌ fail"
             else
               result="⚠️ unknown"
@@ -76,7 +77,6 @@ jobs:
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # Show the command that was run
           echo "<details><summary>Command</summary>" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

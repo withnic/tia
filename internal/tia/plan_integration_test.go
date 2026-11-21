@@ -44,7 +44,9 @@ func TestPlan_FullPipeline(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	args := append(res.Command[:1:1], append([]string{"-v"}, res.Command[1:]...)...)
+	args := make([]string, 0, len(res.Command)+1)
+	args = append(args, res.Command[0], "-v")
+	args = append(args, res.Command[1:]...)
 	if err := Exec(ctx, dir, args, &out, &out); err != nil {
 		t.Fatalf("Exec() error = %v\n%s", err, out.String())
 	}

@@ -224,4 +224,3 @@ func TestRenderType(t *testing.T) {
 		t.Errorf("qualifySignature(dot import) = %q, want empty", got)
 	}
 }
-

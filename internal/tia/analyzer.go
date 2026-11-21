@@ -311,4 +311,3 @@ func hasRef(s *SymbolNode, name string) bool {
 	i := sort.SearchStrings(s.Refs, name)
 	return i < len(s.Refs) && s.Refs[i] == name
 }
-

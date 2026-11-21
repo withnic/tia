@@ -1,0 +1,13 @@
+# Build outputs
+/bin/
+/tia
+*.exe
+*.test
+*.out
+
+# AI workspace
+/.ai-workspace/
+
+# Go vendor / coverage
+/vendor/
+coverage.out

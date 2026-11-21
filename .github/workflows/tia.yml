@@ -1,0 +1,68 @@
+name: TIA (Test Impact Analysis)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build tia
+        run: go build -trimpath -o ./bin/tia ./cmd/tia
+
+      - name: Run TIA
+        run: |
+          base="${{ github.event.pull_request.base.ref }}"
+
+          echo "## Test Impact Analysis" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Base branch: \`${base}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Capture selection rationale from stderr, command from stdout
+          cmd=$(./bin/tia -base "${base}" -dirty=false -v 2> tia-stderr.txt) || true
+          cat tia-stderr.txt >&2
+
+          if [ -z "${cmd}" ]; then
+            echo "No affected integration tests." >> "$GITHUB_STEP_SUMMARY"
+            echo "No affected integration tests."
+            exit 0
+          fi
+
+          echo "### Selected tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat tia-stderr.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Command" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${cmd}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Run the tests
+          echo "### Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if ./bin/tia -base "${base}" -dirty=false -exec -v 2>&1 | tee tia-results.txt; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat tia-results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat tia-results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

@@ -13,6 +13,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.event.pull_request.base.ref }}:refs/heads/${{ github.event.pull_request.base.ref }}"
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
@@ -20,49 +22,76 @@ jobs:
       - name: Build tia
         run: go build -trimpath -o ./bin/tia ./cmd/tia
 
-      - name: Run TIA
+      - name: Select affected tests
+        id: tia
         run: |
           base="${{ github.event.pull_request.base.ref }}"
+          mkdir -p tia-report
 
-          echo "## Test Impact Analysis" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Base branch: \`${base}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          # Capture selection rationale from stderr, command from stdout
-          cmd=$(./bin/tia -base "${base}" -dirty=false -v 2> tia-stderr.txt) || true
-          cat tia-stderr.txt >&2
+          # Capture verbose output (stderr) and command (stdout)
+          cmd=$(./bin/tia -base "${base}" -dirty=false -v 2> tia-report/details.txt) || true
+          cat tia-report/details.txt >&2
 
           if [ -z "${cmd}" ]; then
+            echo "affected=false" >> "$GITHUB_OUTPUT"
+            echo "## Test Impact Analysis" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "No affected integration tests." >> "$GITHUB_STEP_SUMMARY"
-            echo "No affected integration tests."
             exit 0
           fi
 
-          echo "### Selected tests" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat tia-stderr.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "affected=true" >> "$GITHUB_OUTPUT"
+          echo "${cmd}" > tia-report/command.txt
+
+      - name: Run affected tests
+        if: steps.tia.outputs.affected == 'true'
+        run: |
+          # Read the go test command tia generated and insert -v for per-test output
+          cmd=$(cat tia-report/command.txt)
+          # "go test -tags=... ..." -> insert -v after "go test"
+          verbose_cmd=$(echo "${cmd}" | sed 's/^go test /go test -v /')
+          eval "${verbose_cmd}" 2>&1 | tee tia-report/test-output.txt || true
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Build summary
+        if: steps.tia.outputs.affected == 'true'
+        run: |
+          echo "## Test Impact Analysis" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "### Command" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${cmd}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "| Test | Package | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          grep -E '^\s*test ' tia-report/details.txt | while read -r line; do
+            name=$(echo "${line}" | sed -E 's/.*test [^ ]*\.([^ ]+) .*/\1/')
+            pkg=$(echo "${line}" | sed -E 's/.*test ([^ ]*)\..*/\1/')
+            if grep -q -- "--- PASS: ${name}" tia-report/test-output.txt 2>/dev/null; then
+              result="✅ pass"
+            elif grep -q -- "--- FAIL: ${name}" tia-report/test-output.txt 2>/dev/null; then
+              result="❌ fail"
+            else
+              result="⚠️ unknown"
+            fi
+            echo "| ${name} | ${pkg} | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # Run the tests
-          echo "### Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>Command</summary>" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          if ./bin/tia -base "${base}" -dirty=false -exec -v 2>&1 | tee tia-results.txt; then
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat tia-results.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat tia-results.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat tia-report/command.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload detailed report
+        if: steps.tia.outputs.affected == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tia-report
+          path: tia-report/
+          retention-days: 7
+
+      - name: Fail if tests failed
+        if: steps.tia.outputs.affected == 'true' && env.exit_code != '0'
+        run: exit 1

@@ -74,15 +74,55 @@ func Analyze(idx *RepoIndex, seeds *SeedSet) *Selection {
 		return sel
 	}
 
-	// Reverse BFS. parent records the symbol each node was reached from.
-	parent := make(map[int]int)
-	isSeed := make(map[int]bool)
+	bfs := reverseBFS(idx, g, seeds)
+	sel.StoppedAtHubs = bfs.hubs
+
+	for i := range bfs.parent {
+		s := &idx.Symbols[i]
+		sel.Affected = append(sel.Affected, s.ID)
+		if s.IsTest && s.IsIntegration {
+			reason := SelectReference
+			if bfs.isSeed[i] {
+				reason = SelectChanged
+			}
+			sel.Tests = append(sel.Tests, SelectedTest{Symbol: *s, Reason: reason, Path: bfs.chain(idx, i)})
+		}
+	}
+
+	sort.Slice(sel.Tests, func(i, j int) bool { return sel.Tests[i].Symbol.ID < sel.Tests[j].Symbol.ID })
+	sort.Strings(sel.Affected)
+	sort.Strings(sel.StoppedAtHubs)
+	return sel
+}
+
+// bfsResult holds the state produced by a reverse BFS traversal.
+type bfsResult struct {
+	parent map[int]int
+	isSeed map[int]bool
+	hubs   []string
+}
+
+// chain returns the reference path from symbol i back to its seed.
+func (b *bfsResult) chain(idx *RepoIndex, i int) []string {
+	var p []string
+	for ; i >= 0; i = b.parent[i] {
+		p = append(p, idx.Symbols[i].ID)
+	}
+	return p
+}
+
+// reverseBFS walks references in reverse from seeds, stopping at hub symbols.
+func reverseBFS(idx *RepoIndex, g *refGraph, seeds *SeedSet) *bfsResult {
+	b := &bfsResult{
+		parent: make(map[int]int),
+		isSeed: make(map[int]bool),
+	}
 	var queue []int
 	for k := range seeds.Seeds {
 		for _, i := range g.lookup(seeds.Seeds[k].Symbol.ID) {
-			if _, ok := parent[i]; !ok {
-				parent[i] = -1
-				isSeed[i] = true
+			if _, ok := b.parent[i]; !ok {
+				b.parent[i] = -1
+				b.isSeed[i] = true
 				queue = append(queue, i)
 			}
 		}
@@ -91,46 +131,19 @@ func Analyze(idx *RepoIndex, seeds *SeedSet) *Selection {
 		si := queue[0]
 		queue = queue[1:]
 		s := &idx.Symbols[si]
-		if s.IsHub && !isSeed[si] {
-			sel.StoppedAtHubs = append(sel.StoppedAtHubs, s.ID)
+		if s.IsHub && !b.isSeed[si] {
+			b.hubs = append(b.hubs, s.ID)
 			continue
 		}
 		for _, xi := range g.referrers[s.BaseName] {
-			if _, seen := parent[xi]; seen || !g.refersTo(&idx.Symbols[xi], s) {
+			if _, seen := b.parent[xi]; seen || !g.refersTo(&idx.Symbols[xi], s) {
 				continue
 			}
-			parent[xi] = si
+			b.parent[xi] = si
 			queue = append(queue, xi)
 		}
 	}
-
-	chain := func(i int) []string {
-		var p []string
-		for ; i >= 0; i = parent[i] {
-			p = append(p, idx.Symbols[i].ID)
-		}
-		return p
-	}
-	selected := make(map[int]SelectedTest)
-	for i := range parent {
-		s := &idx.Symbols[i]
-		sel.Affected = append(sel.Affected, s.ID)
-		if s.IsTest && s.IsIntegration {
-			reason := SelectReference
-			if isSeed[i] {
-				reason = SelectChanged
-			}
-			selected[i] = SelectedTest{Symbol: *s, Reason: reason, Path: chain(i)}
-		}
-	}
-
-	for i := range selected {
-		sel.Tests = append(sel.Tests, selected[i])
-	}
-	sort.Slice(sel.Tests, func(i, j int) bool { return sel.Tests[i].Symbol.ID < sel.Tests[j].Symbol.ID })
-	sort.Strings(sel.Affected)
-	sort.Strings(sel.StoppedAtHubs)
-	return sel
+	return b
 }
 
 // isMigration reports whether p is an SQL or migration file.
@@ -298,4 +311,3 @@ func hasRef(s *SymbolNode, name string) bool {
 	i := sort.SearchStrings(s.Refs, name)
 	return i < len(s.Refs) && s.Refs[i] == name
 }
-

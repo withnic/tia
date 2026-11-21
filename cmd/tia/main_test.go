@@ -85,7 +85,7 @@ func git(t *testing.T, dir string, args ...string) {
 
 // app is a small module: svc depends on store; other is unrelated.
 var app = map[string]string{
-	"go.mod": "module example.com/app\n\ngo 1.27\n",
+	"go.mod": "module example.com/app\n\ngo 1.26\n",
 	"store/store.go": `package store
 
 type Store struct{}
